@@ -206,13 +206,15 @@ def infer(args):
             bbox = dets[0:4].reshape((2, 2))
             bbox_pts4 = datasets_faceswap.get_box_lm4p(bbox)
 
-        warp_mat_crop = datasets_faceswap.transformation_from_points(
-            bbox_pts4, datasets_faceswap.mean_box_lm4p_512
-        )
-        src_im_crop512 = cv2.warpAffine(
-            np.array(src_im_pil), warp_mat_crop, (512, 512), flags=cv2.INTER_LINEAR
-        )
-        src_im_pil = Image.fromarray(src_im_crop512)
+        # warp_mat_crop = datasets_faceswap.transformation_from_points(
+        #     bbox_pts4, datasets_faceswap.mean_box_lm4p_512
+        # )
+        # src_im_crop512 = cv2.warpAffine(
+        #     np.array(src_im_pil), warp_mat_crop, (512, 512), flags=cv2.INTER_LINEAR
+        # )
+
+        src_im_pil = src_im_pil.resize((512, 512))
+
         face_info = app.get(cv2.cvtColor(np.array(src_im_pil), cv2.COLOR_RGB2BGR))
         face_info = sorted(
             face_info,
@@ -222,14 +224,14 @@ def infer(args):
         ]  # only use the maximum face
         pts5 = face_info["kps"]
 
-        warp_mat = datasets_faceswap.get_affine_transform(
-            pts5, datasets_faceswap.mean_face_lm5p_256
-        )
-        src_im_crop256 = cv2.warpAffine(
-            np.array(src_im_pil), warp_mat, (256, 256), flags=cv2.INTER_LINEAR
-        )
+        # warp_mat = datasets_faceswap.get_affine_transform(
+        #     pts5, datasets_faceswap.mean_face_lm5p_256
+        # )
+        # src_im_crop256 = cv2.warpAffine(
+        #     np.array(src_im_pil), warp_mat, (256, 256), flags=cv2.INTER_LINEAR
+        # )
 
-        # src_im_crop256 = cv2.resize(np.array(src_im_pil), (256, 256)) # assume there is no allignment needed in CelebA
+        src_im_crop256 = cv2.resize(np.array(src_im_pil), (256, 256)) # assume there is no allignment needed in CelebA
         # ======
 
         src_im_crop256_pil = Image.fromarray(src_im_crop256)
@@ -289,13 +291,17 @@ def infer(args):
             warp_mat_crop = datasets_faceswap.transformation_from_points(
                 bbox_pts4, datasets_faceswap.mean_box_lm4p_512
             )
-            drive_im_crop512 = cv2.warpAffine(
-                np.array(drive_im_pil),
-                warp_mat_crop,
-                (512, 512),
-                flags=cv2.INTER_LINEAR,
-            )
-            drive_im_pil = Image.fromarray(drive_im_crop512)
+
+            # drive_im_crop512 = cv2.warpAffine(
+            #     np.array(drive_im_pil),
+            #     warp_mat_crop,
+            #     (512, 512),
+            #     flags=cv2.INTER_LINEAR,
+            # )
+            # drive_im_pil = Image.fromarray(drive_im_crop512)
+            drive_im_pil = drive_im_pil.resize((512, 512))
+            
+
             face_info = app.get(cv2.cvtColor(np.array(drive_im_pil), cv2.COLOR_RGB2BGR))
             face_info = sorted(
                 face_info,
@@ -309,17 +315,17 @@ def infer(args):
             warp_mat = datasets_faceswap.get_affine_transform(
                 pts5, datasets_faceswap.mean_face_lm5p_256
             )
-            drive_im_crop256 = cv2.warpAffine(
-                np.array(drive_im_pil), warp_mat, (256, 256), flags=cv2.INTER_LINEAR
-            )
-
-            # drive_im_crop256 = cv2.resize(np.array(drive_im_pil), (256, 256)) # assume there is no allignment needed in CelebA
+            # drive_im_crop256 = cv2.warpAffine(
+            #     np.array(drive_im_pil), warp_mat, (256, 256), flags=cv2.INTER_LINEAR
+            # )
+            drive_im_crop256 = cv2.resize(np.array(drive_im_pil), (256, 256)) # assume there is no allignment needed in CelebA
 
             drive_im_crop256_pil = Image.fromarray(drive_im_crop256)
             image_tar_crop256 = (
                 pil2tensor(drive_im_crop256_pil).view(1, 3, 256, 256).to(device)
             )
             image_tar_warpmat256 = warp_mat.reshape((1, 2, 3))
+
             images_tar = (
                 pil2tensor(drive_im_pil)
                 .view(1, 3, test_image_size, test_image_size)
@@ -466,9 +472,13 @@ def infer(args):
             face_masks_tar_pad = F.pad(face_masks_tar, (16, 16, 16, 16), "constant", 0)
             blend_mask = F.max_pool2d(
                 face_masks_tar_pad, kernel_size=17, stride=1, padding=8
-            )  # max_pool2d -> avg_pool2d
+            )  # max_pool2d -> avg_pool2d?
             blend_mask = F.avg_pool2d(blend_mask, kernel_size=17, stride=1, padding=8)
-            blend_mask = blend_mask[:, :, 16:528, 16:528]
+
+            print("mask shapes:", blend_mask.shape, face_masks_tar.shape)
+
+            blend_mask = torch.clamp(blend_mask[:, :, 16:-16, 16:-16], 0, 1)
+            face_masks_tar = torch.clamp(face_masks_tar, 0, 1)
 
             controlnet_image_swap = im_pts70 * face_masks_tar + images_tar * (
                 1 - face_masks_tar
@@ -492,6 +502,7 @@ def infer(args):
                 .view(1, 3, test_image_size, test_image_size)
                 .to(images_tar)
             )
+
             swap_res_tensor = swap_res_tensor * blend_mask + images_tar * (
                 1 - blend_mask
             )
@@ -509,10 +520,12 @@ def infer(args):
                 .astype("uint8")
                 .transpose(1, 2, 0)
             )
+
             images_res_pil.save(os.path.join(save_swap_path, src_im_file), quality=100)
-            Image.fromarray(
-                blend_mask.cpu().numpy().astype("uint8").transpose(1, 2, 0)
-            ).save(os.path.join(save_swap_path, f"mask_{img_num}.jpg"), quality=100)
+            
+            # Image.fromarray(
+            #     (blend_mask[0, 0] * 255).cpu().numpy().astype("uint8"), 'L',
+            # ).save(os.path.join(save_swap_path, f"mask_{img_num}.jpg"), quality=100)
 
 
 if __name__ == "__main__":
